@@ -1,0 +1,84 @@
+        -:    0:Source:colorspace.c
+        -:    0:Programs:5
+        -:    1:/* Copyright (c) 2006 Johan Ersfolk, Richard Westerb�ck, �bo Akademi
+        -:    2: *
+        -:    3: * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
+        -:    4: * associated documentation files (the "Software"), to deal in the Software without restriction, 
+        -:    5: * including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, 
+        -:    6: * and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, 
+        -:    7: * subject to the following conditions:
+        -:    8: *
+        -:    9: * The above copyright notice and this permission notice shall be included in all copies or substantial 
+        -:   10: * portions of the Software.
+        -:   11: *
+        -:   12: * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT 
+        -:   13: * LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
+        -:   14: * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+        -:   15: * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+        -:   16: * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+        -:   17: */
+        -:   18:
+        -:   19:#include "colorspace.h"
+        -:   20:#include <stdio.h>
+        -:   21:
+        -:   22:
+        -:   23:
+        -:   24:/* JPEG-YCbCr (601) from "digital 8-bit R'G'B'  "
+        -:   25: * R, G, B    in {0, 1, 2, ..., 255}
+        -:   26: * Y, Cb, Cr  in {0, 1, 2, ..., 255}
+        -:   27: */
+    #####:   28:void RGB_to_YCbCr(RGBPixel* rgb, YCbCrPixel* ycc) {
+    #####:   29:  ycc->Y  = (int)(      + 0.299    * rgb->red + 0.587    * rgb->green + 0.114    * rgb->blue);
+    #####:   30:  ycc->Cb = (int)(128   - 0.168736 * rgb->red - 0.331264 * rgb->green + 0.5      * rgb->blue);
+    #####:   31:  ycc->Cr = (int)(128   + 0.5      * rgb->red - 0.418688 * rgb->green - 0.081312 * rgb->blue);
+    #####:   32:}
+        -:   33:
+        -:   34:
+   307200:   35:void RGB_to_Y(RGBPixel *rgb, int *Y) {
+   307200:   36:  *Y =   (int) (        0.299    * rgb->red + 0.587    * rgb->green + 0.114    * rgb->blue);
+   307200:   37:}
+        -:   38:
+   307200:   39:void RGB_to_Cb(RGBPixel *rgb, int *Cb) {
+   307200:   40:  *Cb =  (int) (128   - 0.168736 * rgb->red - 0.331264 * rgb->green + 0.5      * rgb->blue);
+   307200:   41:}
+        -:   42:
+   307200:   43:void RGB_to_Cr(RGBPixel *rgb, int *Cr) {
+   307200:   44:  *Cr =  (int) (128   + 0.5      * rgb->red - 0.418688 * rgb->green - 0.081312 * rgb->blue);
+   307200:   45:}
+        -:   46:
+        -:   47:
+     4800:   48:void downsample_vertical(int b1[], int b2[]) {
+        -:   49:  int row;
+    43200:   50:  for (row = 0; row < 8; row++) {
+    38400:   51:    b1[row*8 + 0] = (b1[row*8 + 0] + b1[row*8 + 1])/2;
+    38400:   52:    b1[row*8 + 1] = (b1[row*8 + 2] + b1[row*8 + 3])/2;
+    38400:   53:    b1[row*8 + 2] = (b1[row*8 + 4] + b1[row*8 + 5])/2;
+    38400:   54:    b1[row*8 + 3] = (b1[row*8 + 6] + b1[row*8 + 7])/2;
+    38400:   55:    b1[row*8 + 4] = (b2[row*8 + 0] + b2[row*8 + 1])/2;
+    38400:   56:    b1[row*8 + 5] = (b2[row*8 + 2] + b2[row*8 + 3])/2;
+    38400:   57:    b1[row*8 + 6] = (b2[row*8 + 4] + b2[row*8 + 5])/2;
+    38400:   58:    b1[row*8 + 7] = (b2[row*8 + 6] + b2[row*8 + 7])/2;
+        -:   59:  }
+     4800:   60:}
+        -:   61:
+        -:   62:/* TODO: this filter is too simple */
+    #####:   63:void downsample_component(int *component, int width, int height) {
+        -:   64:  int i;
+    #####:   65:  for (i = 0; i < width*height/2; i++) {
+    #####:   66:    component[i] =
+    #####:   67:      (component[(i*2)]+
+    #####:   68:         component[(i*2+1)]
+    #####:   69:       )/2;
+        -:   70:  }
+        -:   71:    
+        -:   72:  /*for (y = 0; y < height/2; y++) {
+        -:   73:    for (x = 0; x < width/2; x++) {
+        -:   74:      component[x + y*width] =
+        -:   75:        (component[(x*2) + (y*2)*width]+
+        -:   76:         component[(x*2+1) + (y*2)*width]+
+        -:   77:         component[(x*2) + (y*2+1)*width]+
+        -:   78:         component[(x*2+1) + (y*2+1)*width]     
+        -:   79:        )/4;
+        -:   80:    }
+        -:   81:  }*/
+    #####:   82:}

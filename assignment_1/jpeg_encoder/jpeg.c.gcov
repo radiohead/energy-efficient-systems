@@ -1,0 +1,375 @@
+        -:    0:Source:jpeg.c
+        -:    0:Programs:5
+        -:    1:/* Copyright (c) 2006 Johan Ersfolk, Richard Westerbäck, Åbo Akademi
+        -:    2: *
+        -:    3: * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
+        -:    4: * associated documentation files (the "Software"), to deal in the Software without restriction, 
+        -:    5: * including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, 
+        -:    6: * and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, 
+        -:    7: * subject to the following conditions:
+        -:    8: *
+        -:    9: * The above copyright notice and this permission notice shall be included in all copies or substantial 
+        -:   10: * portions of the Software.
+        -:   11: *
+        -:   12: * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT 
+        -:   13: * LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
+        -:   14: * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+        -:   15: * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+        -:   16: * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+        -:   17: */
+        -:   18: 
+        -:   19:#include <stdio.h>
+        -:   20:#include "jpeg.h"
+        -:   21:#include "costable.h"
+        -:   22:#include "jfifwriter.h"
+        -:   23:#include "dcttable.h"
+        -:   24:
+        -:   25:static void build_huffman_codes(unsigned char*, 
+        -:   26:                                unsigned short*, 
+        -:   27:                                const unsigned char*, 
+        -:   28:                                const unsigned char*);
+        -:   29:
+        -:   30:static void write_to_buffer(unsigned char byte);
+        -:   31:
+        -:   32:static const float PI = 3.14159265359;
+        -:   33:
+        -:   34:unsigned char  huff_size_dc_luminance[12];
+        -:   35:unsigned short huff_code_dc_luminance[12];
+        -:   36:unsigned char  huff_size_dc_chrominance[12];
+        -:   37:unsigned short huff_code_dc_chrominance[12];
+        -:   38:
+        -:   39:unsigned char  huff_size_ac_luminance[256];
+        -:   40:unsigned short huff_code_ac_luminance[256];
+        -:   41:unsigned char  huff_size_ac_chrominance[256];
+        -:   42:unsigned short huff_code_ac_chrominance[256];
+        -:   43:
+        -:   44:int prev_dc_component_y = 0;
+        -:   45:int prev_dc_component_cb = 0;
+        -:   46:int prev_dc_component_cr = 0;
+        -:   47:
+        -:   48:static int buffer = 0;
+        -:   49:static int buffer_index = 32;
+        -:   50:
+        -:   51:/*
+        -:   52: * WARNING: Does not work very well sometimes ;)
+        -:   53: */
+        -:   54:unsigned char data_buffer[1000000];
+        -:   55:int data_index = 0;
+        -:   56:
+        -:   57:
+        -:   58:/* This function simply subtracts every value in the 
+        -:   59: * block by 128. This transforms the values from the range
+        -:   60: * 0 -> 255 to -128 -> +127
+        -:   61: */
+     9600:   62:void adjustMatrix(int block[]) {
+        -:   63:  int i;
+   624000:   64:  for (i = 0; i < 64; i++) {
+   614400:   65:    block[i] -= 128;
+        -:   66:  }
+     9600:   67:}
+        -:   68:
+        -:   69:
+        -:   70:
+        -:   71:/* Discrete cosine transform
+        -:   72: * For more information see A.3.3
+        -:   73: */
+        -:   74:
+        -:   75:/* This one is slow
+        -:   76:void dct(int input[], int output[]) {
+        -:   77:  int u, v, x, y;
+        -:   78:  float f,CU,CV;
+        -:   79:  float c = 0.707106781187; // 1/sqrt(2)
+        -:   80:  for(u = 0; u < 8; u++) {
+        -:   81:    for(v = 0; v < 8; v++) {
+        -:   82:      f = 0;
+        -:   83:      for(x = 0; x < 8; x++) {
+        -:   84:        for(y = 0; y < 8; y++) {
+        -:   85:          f += input[x*8 + y] *
+        -:   86:            my_cos( ((2*x+1)*u*PI)/16 ) *my_cos( ((2*y+1)*v*PI)/16 ); 
+        -:   87:        }
+        -:   88:      }
+        -:   89:      CU = (u==0) ? (c): 1;
+        -:   90:      CV = (v==0) ? (c): 1;
+        -:   91:      output[u*8+v] = my_round( 0.25*CU*CV*f );
+        -:   92:    }
+        -:   93:  }
+        -:   94:}
+        -:   95:*/
+        -:   96:
+        -:   97:#define dct_lookup(x,y) \
+        -:   98:	dct_lookup_table[(x)*8+(y)]
+        -:   99:
+        -:  100:#define inner_dct(s,x,y,u,v) \
+        -:  101:	(s[(x)*8+(y)]) * dct_lookup(u,x) * dct_lookup(v,y)
+        -:  102:
+     9600:  103:void dct(int input[], int output[]) {
+        -:  104:	int u, v, x;
+        -:  105:	float f,CU,CV;
+     9600:  106:	float c = 0.707106781187; /* 1/sqrt(2) */
+    86400:  107:	for(u = 0; u < 8; u++) {
+   691200:  108:		for(v = 0; v < 8; v++) {
+   614400:  109:			CU = (u==0) ? (c): 1;
+   614400:  110:			CV = (v==0) ? (c): 1;
+   614400:  111:			f = 0;
+  5529600:  112:			for(x = 0; x < 8; x++) {
+  4915200:  113:				f += inner_dct( input, x, 0 , u, v);
+  4915200:  114:				f += inner_dct( input, x, 1 , u, v);
+  4915200:  115:				f += inner_dct( input, x, 2 , u, v);
+  4915200:  116:				f += inner_dct( input, x, 3 , u, v);
+  4915200:  117:				f += inner_dct( input, x, 4 , u, v);
+  4915200:  118:				f += inner_dct( input, x, 5 , u, v);
+  4915200:  119:				f += inner_dct( input, x, 6 , u, v);
+  4915200:  120:				f += inner_dct( input, x, 7 , u, v);
+        -:  121:			}
+   614400:  122:			output[u*8+v] = my_round( 0.25*CU*CV*f );
+        -:  123:		}
+        -:  124:	}
+     9600:  125:}
+        -:  126:
+        -:  127:
+        -:  128:/* Quantization. This is a lossy compression. Divides the elements of the current block
+        -:  129: * by some numbers and rounds the value to the closest integer.
+        -:  130: */
+     9600:  131:void quantization(int input[], int output[], int type) {
+        -:  132:  int i;
+     9600:  133:  if (type == LUMINANCE_BLOCK) {
+   312000:  134:    for (i = 0; i < 64; i++) {
+   307200:  135:      output[i] = my_round((float)input[i]/(float)std_luminance_quant_tbl[i]);
+        -:  136:    }
+        -:  137:  } else {
+   312000:  138:    for (i = 0; i < 64; i++) {
+   307200:  139:      output[i] = my_round((float)input[i]/(float)std_chrominance_quant_tbl[i]);
+        -:  140:    }
+        -:  141:  }
+     9600:  142:}
+        -:  143:
+        -:  144:
+        -:  145:/* Arrange the data in zigzag order.
+        -:  146: * This will place most of the non-zero values in the begining of the array
+        -:  147: */
+     9600:  148:void zigzag(int input[], int output[]) {
+        -:  149:  int i;
+   624000:  150:  for(i = 0; i < 64; i++)
+   614400:  151:    output[i] = input[zigzag_table[i]];
+     9600:  152:}
+        -:  153:
+        -:  154:
+        -:  155:/* Run length coding and Variable length coding (huffman coding).
+        -:  156: * The zigzag pass must be run before this. Type is one of the 
+        -:  157: * block types: LUMINANCE_BLOCK or CHROMINANCE_BLOCK
+        -:  158: */
+     9600:  159:void rlc_vlc_encode(int block[], int type) {
+     9600:  160:	int run, value = 0, nbits, code, mant, i;
+        -:  161:
+     9600:  162:	int		prev_dc_component = -1;
+     9600:  163:	unsigned char	*huff_size_dc = NULL;
+     9600:  164:	unsigned short	*huff_code_dc = NULL;
+     9600:  165:	unsigned char	*huff_size_ac = NULL;
+     9600:  166:	unsigned short	*huff_code_ac = NULL;
+        -:  167:
+        -:  168:
+     9600:  169:	if ( type == LUMINANCE_BLOCK) {
+     4800:  170:		huff_size_dc = huff_size_dc_luminance;
+     4800:  171:		huff_code_dc = huff_code_dc_luminance;
+     4800:  172:		huff_size_ac = huff_size_ac_luminance;
+     4800:  173:		huff_code_ac = huff_code_ac_luminance;
+     4800:  174:		prev_dc_component = prev_dc_component_y;
+     4800:  175:		prev_dc_component_y = block[0];
+     4800:  176:	} else if ( type == CHROMINANCE_BLOCK_B) {
+     2400:  177:		huff_size_dc = huff_size_dc_chrominance;
+     2400:  178:		huff_code_dc = huff_code_dc_chrominance;
+     2400:  179:		huff_size_ac = huff_size_ac_chrominance;
+     2400:  180:		huff_code_ac = huff_code_ac_chrominance;
+     2400:  181:		prev_dc_component = prev_dc_component_cb;
+     2400:  182:		prev_dc_component_cb = block[0];
+     2400:  183:	} else if ( type == CHROMINANCE_BLOCK_R) {
+     2400:  184:		huff_size_dc = huff_size_dc_chrominance;
+     2400:  185:		huff_code_dc = huff_code_dc_chrominance;
+     2400:  186:		huff_size_ac = huff_size_ac_chrominance;
+     2400:  187:		huff_code_ac = huff_code_ac_chrominance;
+     2400:  188:		prev_dc_component = prev_dc_component_cr;
+     2400:  189:		prev_dc_component_cr = block[0];
+        -:  190:	}
+        -:  191:
+        -:  192:
+        -:  193:	/* DC component */
+     9600:  194:	value = block[0] - prev_dc_component;
+     9600:  195:	if (value == 0) {
+     2519:  196:		put_bits(huff_size_dc[0], huff_code_dc[0]);
+        -:  197:	} else {
+     7081:  198:		mant = value;
+     7081:  199:		if (value < 0) {
+     3714:  200:			value = -value;
+     3714:  201:			mant--;
+        -:  202:		}
+     7081:  203:		nbits = bits_needed(value);
+        -:  204:
+     7081:  205:		put_bits(huff_size_dc[nbits], huff_code_dc[nbits]);
+        -:  206:
+     7081:  207:		put_bits(nbits, mant & ((1 << nbits) - 1));
+        -:  208:	}
+        -:  209:
+        -:  210:
+        -:  211:	/* AC component */
+     9600:  212:	run = 0;
+   614400:  213:	for(i = 1; i < 64; i++) {
+   604800:  214:		value = block[i];
+   604800:  215:		if (value == 0)   {
+   573053:  216:			run++;
+        -:  217:		} else {
+        -:  218:			/* if the run is larger than 15 put in this special marker for every 15th zero */
+    63494:  219:			while (run >= 16) {
+    #####:  220:				put_bits(huff_size_ac[0xf0], huff_code_ac[0xf0]);
+    #####:  221:				run -= 16;
+        -:  222:			}
+    31747:  223:			mant = value;
+    31747:  224:			if (value < 0) {
+    15764:  225:				value = -value;
+    15764:  226:				mant--;
+        -:  227:			}
+        -:  228:
+    31747:  229:			nbits = bits_needed(value);
+    31747:  230:			code = (run << 4) | nbits;
+        -:  231:			/* first add the huffman code for the runlength-size pair */
+    31747:  232:			put_bits(huff_size_ac[code], huff_code_ac[code]);
+        -:  233:			/* then put the amplitude of the coefficient */
+    31747:  234:			put_bits(nbits, mant & ((1 << nbits) - 1));
+        -:  235:
+    31747:  236:			run = 0;
+        -:  237:		}
+        -:  238:	}
+        -:  239:
+     9600:  240:	if (run > 1) {put_bits(huff_size_ac[0], huff_code_ac[0]);}
+     9600:  241:}
+        -:  242:
+        -:  243:/* This function builds the different huffman tables from the 
+        -:  244: * huffman specification tables.
+        -:  245: */
+        -:  246:
+        1:  247:void init_huffman_codes() {
+        1:  248:  build_huffman_codes(huff_size_ac_luminance,
+        -:  249:                      huff_code_ac_luminance,
+        -:  250:                      bits_ac_luminance,
+        -:  251:                      val_ac_luminance);
+        1:  252:  build_huffman_codes(huff_size_ac_chrominance,
+        -:  253:                      huff_code_ac_chrominance,
+        -:  254:                      bits_ac_chrominance,
+        -:  255:                      val_ac_chrominance);
+        1:  256:  build_huffman_codes(huff_size_dc_luminance,
+        -:  257:                      huff_code_dc_luminance,
+        -:  258:                      bits_dc_luminance,
+        -:  259:                      val_dc_luminance);
+        1:  260:  build_huffman_codes(huff_size_dc_chrominance,
+        -:  261:                      huff_code_dc_chrominance,
+        -:  262:                      bits_dc_chrominance,
+        -:  263:                      val_dc_chrominance);
+        1:  264:}
+        -:  265:
+        -:  266:/* This function build the huffman tables from the specifications given in the 
+        -:  267: * huffman specification tables (bits_table and val_table). 
+        -:  268: * This function is based on the JPEG standard annex c
+        -:  269: * the implementation is a combination of figures C.1, C.2 and C.3
+        -:  270: * The three loops is the three pictures in the standard is combined to one
+        -:  271: * to avoid the use of unnessesary arrays of temporary values
+        -:  272: */
+        4:  273:static void build_huffman_codes(unsigned char *huff_size, unsigned short *huff_code,
+        -:  274:                                 unsigned const char *bits_table, unsigned const char *val_table)
+        -:  275:{
+        4:  276:  int i, j, k = 0;
+        4:  277:  int code = 0;
+        -:  278:  
+       68:  279:  for (i = 1; i <= 16; i++) {
+      412:  280:    for (j = 0; j < bits_table[i]; j++) {
+      348:  281:      huff_size[ val_table[k] ] = i;
+      348:  282:      huff_code[ val_table[k] ] = code;
+      348:  283:      code++;
+      348:  284:      k++;
+        -:  285:    }
+       64:  286:    code <<= 1;
+        -:  287:  }
+        4:  288:}
+        -:  289:
+        -:  290:/* This funtion adds the n least significant bits of the value to a stream
+        -:  291: * In this case the values are just sent to the jfif writer
+        -:  292: */
+    89775:  293:void put_bits(int n, int value) {
+    89775:  294:	value = value << (buffer_index - n);
+    89775:  295:	buffer = buffer | value;
+    89775:  296:	buffer_index -= n;
+   206913:  297:	while (buffer_index < 24) {
+        -:  298:		unsigned char byte;
+    27363:  299:		byte = (buffer >> 24) & 0xFF;
+    27363:  300:		write_to_buffer(byte);
+    27363:  301:		if (byte == 0xFF)	{
+       24:  302:			write_to_buffer( 0x00 ); /* padding */
+        -:  303:		}
+    27363:  304:		buffer = buffer << 8;
+    27363:  305:		buffer_index += 8;
+        -:  306:	}
+    89775:  307:}
+        -:  308:
+        -:  309:/* This function calculates how many bits are needed to represent 
+        -:  310: * the specific value. This number combined with the zero-run-lengt
+        -:  311: * is the key to the huffman table. It is also used when the value 
+        -:  312: * is written to the stream.
+        -:  313: */
+    38828:  314:int bits_needed(int value) {
+        -:  315:  int i;
+    38828:  316:  if (value < 0) value *= -1;
+    64726:  317:  for (i = 1;;i++) {
+   103554:  318:    if (value < (1 << i)) return i;
+    25898:  319:  } 
+        -:  320:}
+        -:  321:
+        -:  322:
+    27388:  323:static void write_to_buffer(unsigned char byte) {
+        -:  324:  /* write the byte to a file */
+    27388:  325:  data_buffer[data_index++] = byte;
+    27388:  326:}
+        -:  327:
+        -:  328:/* use this to flush the buffer
+        -:  329: * If the buffer contains data, pad it with ones 
+        -:  330: * If the buffer is empty: do nothing
+        -:  331: */
+        1:  332:void padd_entropy_coded_data() {
+        1:  333:  if (buffer_index < 32) { 
+        1:  334:    int value = 0xFF << (buffer_index - 8);
+        -:  335:    unsigned char byte;
+        1:  336:    buffer = buffer | value;
+        1:  337:    byte = (buffer >> 24) & 0xFF;
+        1:  338:    write_to_buffer(byte);
+        1:  339:    if (byte == 0xFF) write_to_buffer(0x00);
+        -:  340:  }
+        1:  341:  buffer_index=32;
+        1:  342:  buffer = 0;
+        1:  343:}
+        -:  344:
+        1:  345:int get_entropy_coded_section_size() {
+        1:  346:  return data_index;
+        -:  347:}
+        -:  348:
+        1:  349:unsigned char* get_entropy_coded_section() {
+        1:  350:  return data_buffer;
+        -:  351:}
+        -:  352:
+        1:  353:void reset_entropy_coded_section() {
+        1:  354:  data_index = 0;
+        1:  355:}
+        -:  356:
+        -:  357:/* A cosine implementation using a lookup table,
+        -:  358: * 
+        -:  359: */
+    #####:  360:float my_cos( float angle ) {
+    #####:  361:  int a = (my_round(angle * 100))%628;
+    #####:  362:  if (a > 471)      {return cosine_lookup_table[628 - a];}
+    #####:  363:  else if (a > 314) {return -cosine_lookup_table[a - 314];}
+    #####:  364:  else if (a > 157) {return -cosine_lookup_table[314 - a];}
+    #####:  365:  return cosine_lookup_table[a];
+        -:  366:}
+        -:  367:
+  1228800:  368:int my_round( float f ) {
+  1228800:  369:  double factor = (f<0)?(-0.5):0.5;
+  1228800:  370:  return (int)(f+factor);
+        -:  371:}
+        -:  372:
+        -:  373:

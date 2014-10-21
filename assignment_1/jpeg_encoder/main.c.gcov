@@ -1,0 +1,189 @@
+        -:    0:Source:main.c
+        -:    0:Programs:5
+        -:    1:/* Copyright (c) 2006 Johan Ersfolk, Richard Westerb�ck, �bo Akademi
+        -:    2: *
+        -:    3: * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
+        -:    4: * associated documentation files (the "Software"), to deal in the Software without restriction, 
+        -:    5: * including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, 
+        -:    6: * and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, 
+        -:    7: * subject to the following conditions:
+        -:    8: *
+        -:    9: * The above copyright notice and this permission notice shall be included in all copies or substantial 
+        -:   10: * portions of the Software.
+        -:   11: *
+        -:   12: * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT 
+        -:   13: * LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
+        -:   14: * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+        -:   15: * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+        -:   16: * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+        -:   17: */
+        -:   18:
+        -:   19:
+        -:   20:/* This program takes as arguments 2 file names
+        -:   21: * the first is a name of an excisting bitmap-image-file
+        -:   22: * and the second is the name of output file. If the output
+        -:   23: * file exists it is overwritten.
+        -:   24: */
+        -:   25:
+        -:   26:#include "jpeg.h"
+        -:   27:#include "bmparser.h"
+        -:   28:#include "colorspace.h"
+        -:   29:#include "jfifwriter.h"
+        -:   30:#include <stdio.h>
+        -:   31:#include <malloc.h>
+        -:   32:
+        -:   33:
+        -:   34:// these are created in bmparser
+        -:   35:extern BITMAPFILEHEADER file_h;
+        -:   36:extern BITMAPINFOHEADER info_h;
+        -:   37:
+        -:   38:
+        -:   39:RGBPixel* rgb_pixel_array;
+        -:   40:
+        -:   41:
+        -:   42:// Arrays to hold 8x8 blocks
+        -:   43:
+        -:   44:int block_Y1[64];
+        -:   45:int block_Cb1[64];
+        -:   46:int block_Cr1[64];
+        -:   47:
+        -:   48:int block_Y2[64];
+        -:   49:int block_Cb2[64];
+        -:   50:int block_Cr2[64];
+        -:   51:
+        -:   52:int width, height;
+        -:   53:
+        -:   54:/* A simple function which prints a 8x8 block 
+        -:   55: * to the screen, only used for testing 
+        -:   56: */
+    #####:   57:void print_block(int block[]) {
+        -:   58:	int i;
+    #####:   59:	for (i = 0; i < 64; i++) {
+    #####:   60:		if ( (i % 8)==0 ) printf("\n");
+    #####:   61:		printf("%3d ", block[i]);
+        -:   62:	}
+    #####:   63:	printf("\n");
+    #####:   64:}
+        -:   65:
+        -:   66:
+        -:   67:
+        -:   68:/* Gets the block specified by index,
+        -:   69: * converts it to Y, Cb,Cr
+        -:   70: * and puts 8x8 blocks in the arrays
+        -:   71: */
+     4800:   72:void getBlock(int index, int Y[], int Cb[], int Cr[]) {
+     4800:   73:	unsigned int j = 0, i, x, y;
+     4800:   74:	unsigned int col = index % (width/8);
+     4800:   75:	unsigned int row = index / (width/8);
+        -:   76:
+    43200:   77:	for (y = 0; y < 8; y++)	{
+   345600:   78:		for (x = 0; x < 8; x++)	{
+   307200:   79:			i = 8*col + x + 8*row*width + y*width; /* source */
+   307200:   80:			RGB_to_Y(  bm_get_pixel(i, rgb_pixel_array), &Y[j]);
+   307200:   81:			RGB_to_Cb( bm_get_pixel(i, rgb_pixel_array), &Cb[j]);
+   307200:   82:			RGB_to_Cr( bm_get_pixel(i, rgb_pixel_array), &Cr[j]);
+   307200:   83:			j++;
+        -:   84:		}
+        -:   85:	}
+     4800:   86:}
+        -:   87:
+        -:   88:
+        -:   89:/* This funtion simply reads the inputfile, runs the jpeg passes
+        -:   90: * and print the output file
+        -:   91: */
+        1:   92:int main(int argc, char* argv[]){
+        -:   93:	unsigned int i, num_of_pixels, num_of_blocks;
+        -:   94:
+        1:   95:	if (argc < 3)	{
+    #####:   96:		printf("Usage: %s input-file output-file\n", argv[0]);
+    #####:   97:		return 1;
+        -:   98:	}
+        -:   99:
+        -:  100:	/* get a poniter to the first pixel in the array with rgb-values */
+        1:  101:	bm_get_pixel_array(argv[1], &rgb_pixel_array); /* remember to free the array */
+        -:  102:
+        -:  103:	/* the width and height must be a multiple of 8 */
+        1:  104:	width = info_h.width;
+        1:  105:	height = info_h.height;
+        1:  106:	if (width %8) width  += 8-width%8;
+        1:  107:	if (height%8) height += 8-height%8;
+        1:  108:	num_of_pixels =  width * height;
+        1:  109:	num_of_blocks = num_of_pixels/64;
+        -:  110:
+        -:  111:
+        -:  112:
+        -:  113:
+        1:  114:	init_huffman_codes();
+        -:  115:
+        1:  116:	init_jfif_writer(argv[2], info_h.width, info_h.height);
+        -:  117:
+        -:  118:	// write headers to file
+        1:  119:	jfif_start_of_image();
+        1:  120:	jfif_define_quant_tables();
+        1:  121:	jfif_frame();
+        1:  122:	jfif_define_huff_tables();
+        -:  123:
+        -:  124:	// write scan header - a scan is where the data goes
+        1:  125:	jfif_scan();
+        -:  126:
+        -:  127:	// a array for temp values
+        -:  128:	int block[64];
+        -:  129:
+     2401:  130:	for(i = 0; i < num_of_blocks; i+=2) {
+        -:  131:
+        -:  132:		// Get 2 vertically neighbouring blocks
+     2400:  133:		getBlock(i, block_Y1, block_Cb1, block_Cr1);
+     2400:  134:		getBlock(i+1, block_Y2, block_Cb2, block_Cr2);
+        -:  135:
+        -:  136:		// Downsample the color components (4:2:2)
+     2400:  137:		downsample_vertical(block_Cb1, block_Cb2);
+     2400:  138:		downsample_vertical(block_Cr1, block_Cr2);
+        -:  139:
+        -:  140:		// Y
+     2400:  141:		adjustMatrix(block_Y1);
+     2400:  142:		dct(block_Y1, block);
+     2400:  143:		quantization(block, block_Y1, LUMINANCE_BLOCK);
+     2400:  144:		zigzag(block_Y1, block);
+     2400:  145:		rlc_vlc_encode(block, LUMINANCE_BLOCK);
+        -:  146:
+        -:  147:		// Y
+     2400:  148:		adjustMatrix(block_Y2);
+     2400:  149:		dct(block_Y2, block);
+     2400:  150:		quantization(block, block_Y2, LUMINANCE_BLOCK);
+     2400:  151:		zigzag(block_Y2, block);
+     2400:  152:		rlc_vlc_encode(block, LUMINANCE_BLOCK);
+        -:  153:
+        -:  154:		//Cb
+     2400:  155:		adjustMatrix(block_Cb1);
+     2400:  156:		dct(block_Cb1, block);
+     2400:  157:		quantization(block, block_Cb1, CHROMINANCE_BLOCK_B);
+     2400:  158:		zigzag(block_Cb1, block);
+     2400:  159:		rlc_vlc_encode(block, CHROMINANCE_BLOCK_B);
+        -:  160:
+        -:  161:		//Cr
+     2400:  162:		adjustMatrix(block_Cr1);
+     2400:  163:		dct(block_Cr1, block);
+     2400:  164:		quantization(block, block_Cr1, CHROMINANCE_BLOCK_R);
+     2400:  165:		zigzag(block_Cr1, block);
+     2400:  166:		rlc_vlc_encode(block, CHROMINANCE_BLOCK_R);
+        -:  167:	}
+        -:  168:
+        1:  169:	padd_entropy_coded_data();
+        -:  170:
+        1:  171:	jfif_write_buffer_to_output_buffer(
+        -:  172:		get_entropy_coded_section(),
+        -:  173:		get_entropy_coded_section_size()
+        -:  174:	);
+        1:  175:	reset_entropy_coded_section();
+        -:  176:
+        -:  177:
+        1:  178:	jfif_end_of_image();
+        -:  179:
+        1:  180:	close_jfif_writer();
+        -:  181:
+        1:  182:	free(rgb_pixel_array);
+        -:  183:
+        1:  184:	return 0;
+        -:  185:}
+        -:  186:
+        -:  187:

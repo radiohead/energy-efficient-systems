@@ -1,0 +1,199 @@
+        -:    0:Source:jfifwriter.c
+        -:    0:Programs:5
+        -:    1:/* Copyright (c) 2006 Johan Ersfolk, Richard Westerb�ck, �bo Akademi
+        -:    2: *
+        -:    3: * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
+        -:    4: * associated documentation files (the "Software"), to deal in the Software without restriction, 
+        -:    5: * including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, 
+        -:    6: * and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, 
+        -:    7: * subject to the following conditions:
+        -:    8: *
+        -:    9: * The above copyright notice and this permission notice shall be included in all copies or substantial 
+        -:   10: * portions of the Software.
+        -:   11: *
+        -:   12: * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT 
+        -:   13: * LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
+        -:   14: * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+        -:   15: * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+        -:   16: * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+        -:   17: */
+        -:   18:
+        -:   19:/* File for writing a simple jfif file
+        -:   20: * based on ISO/IEC 10918-1 Annex B
+        -:   21: */
+        -:   22:
+        -:   23:#include <stdio.h>
+        -:   24:#include "jfifwriter.h"
+        -:   25:#include "jpeg.h"
+        -:   26:
+        -:   27:static void flush_output_buffer();
+        -:   28:static void write_to_file(unsigned char byte);
+        -:   29:
+        -:   30:
+        -:   31:static char output_buffer[4096];
+        -:   32:static int output_index = 0;
+        -:   33:
+        -:   34:char img_width[2];
+        -:   35:char img_height[2];
+        -:   36:
+        -:   37:FILE *fp;
+        -:   38:
+        -:   39:
+        1:   40:void init_jfif_writer(char* file_name, int size_x, int size_y) {
+        1:   41:  fp = fopen(file_name, "wb");
+        1:   42:  img_width[0] = size_x/0x100;
+        1:   43:  img_width[1] = size_x%0x100;
+        1:   44:  img_height[0]= size_y/0x100;
+        1:   45:  img_height[1]= size_y%0x100;
+        1:   46:}
+        -:   47:
+        1:   48:void jfif_start_of_image() {
+        1:   49:  write_to_file(0xFF); write_to_file(0xD8); // start of image
+        1:   50:  write_to_file(0xFF); write_to_file(0xE0); // JFIF APP0 marker
+        1:   51:  write_to_file(0x00); write_to_file(0x06); // APP0 segment length - might not be needed
+        1:   52:  write_to_file(0x4A); // J
+        1:   53:  write_to_file(0x46); // F
+        1:   54:  write_to_file(0x49); // I
+        1:   55:  write_to_file(0x46); // F
+        1:   56:}
+        -:   57:
+        1:   58:void jfif_define_quant_tables() {
+        -:   59:  int i;
+        -:   60:  // first we write the luminance table
+        1:   61:  write_to_file(0xFF); write_to_file(0xDB); // marker
+        1:   62:  write_to_file(0x00); write_to_file(0x43); // length of this segment
+        1:   63:  write_to_file(0x00);      // Q-table precision(8 bit) and Q-table destination id 
+       65:   64:  for(i = 0; i < 64; i++) { // write the table
+       64:   65:    write_to_file(std_luminance_quant_tbl[i]);
+        -:   66:  }
+        -:   67:  
+        -:   68:  // write the chrominance table 
+        1:   69:  write_to_file(0xFF); write_to_file(0xDB); // marker
+        1:   70:  write_to_file(0x00); write_to_file(0x43); // length of this segment
+        1:   71:  write_to_file(0x01);      // Q-table precision(8 bit) and Q-table destination id 
+       65:   72:  for(i = 0; i < 64; i++) { // write the table
+       64:   73:    write_to_file(std_chrominance_quant_tbl[i]);
+        -:   74:  }
+        1:   75:}
+        -:   76:
+        1:   77:void jfif_frame() {
+        1:   78:  write_to_file(0xFF); write_to_file(0xC0); // start of frame for baseline
+        1:   79:  write_to_file(0x00); write_to_file(0x11); // frame header length
+        1:   80:  write_to_file(0x08);                      // Sample precision, 8 bit
+        1:   81:  write_to_file(img_height[0]); write_to_file(img_height[1]); // Y: number of lines
+        1:   82:  write_to_file(img_width[0]);  write_to_file(img_width[1]);  // X: number of samples per line
+        1:   83:  write_to_file(0x03);                      // Nf: number of image components Y, Cb, Cr
+        -:   84:  // Y component
+        1:   85:  write_to_file(0x01);                      // C: Component id
+        1:   86:  write_to_file(0x21);                      // H & V: Horizontal and Vertical sampling factor
+        1:   87:  write_to_file(0x00);                      // Tq: Quantization table destination selector
+        -:   88:  // Cb component
+        1:   89:  write_to_file(0x02);                      // C: Component id
+        1:   90:  write_to_file(0x11);                      // H & V: Horizontal and Vertical sampling factor
+        1:   91:  write_to_file(0x01);                      // Tq: Quantization table destination selector
+        -:   92:  // Cr component
+        1:   93:  write_to_file(0x03);                      // C: Component id
+        1:   94:  write_to_file(0x11);                      // H & V: Horizontal and Vertical sampling factor
+        1:   95:  write_to_file(0x01);                      // Tq: Quantization table destination selector
+        -:   96:   
+        1:   97:}
+        -:   98:
+        1:   99:void jfif_define_huff_tables() {
+        -:  100:  int i;
+        -:  101:
+        -:  102:  //  Dc luminance
+        1:  103:  write_to_file(0xFF); write_to_file(0xC4); // Define Huffman table marker
+        1:  104:  write_to_file(0x00); write_to_file(0x1F); // Lh - length of this segment 
+        1:  105:  write_to_file(0x00);                      // Tc and Th - Table class(Dc=0, Ac=1) and Table Id
+       17:  106:  for(i = 1; i < 17; i++) { // the BITS list
+       16:  107:    write_to_file(bits_dc_luminance[i]);
+        -:  108:  }
+       13:  109:  for(i = 0; i < 12; i++) { // the HUFFVAL list
+       12:  110:    write_to_file(val_dc_luminance[i]);
+        -:  111:  }
+        -:  112:
+        -:  113:  //  Ac luminance
+        1:  114:  write_to_file(0xFF); write_to_file(0xC4); // Define Huffman table marker
+        1:  115:  write_to_file(0x00); write_to_file(0xB5); // Lh - length of this segment 
+        1:  116:  write_to_file(0x10);                      // Tc and Th - Table class(Dc=0, Ac=1) and Table Id
+       17:  117:  for(i = 1; i < 17; i++) { // the BITS list
+       16:  118:    write_to_file(bits_ac_luminance[i]);
+        -:  119:  }
+      163:  120:  for(i = 0; i < 162; i++) { // the HUFFVAL list
+      162:  121:    write_to_file(val_ac_luminance[i]);
+        -:  122:  }
+        -:  123:  
+        -:  124:  //  Dc chrominance
+        1:  125:  write_to_file(0xFF); write_to_file(0xC4); // Define Huffman table marker
+        1:  126:  write_to_file(0x00); write_to_file(0x1F); // Lh - length of this segment 
+        1:  127:  write_to_file(0x01);                      // Tc and Th - Table class(Dc=0, Ac=1) and Table Id
+       17:  128:  for(i = 1; i < 17; i++) { // the BITS list
+       16:  129:    write_to_file(bits_dc_chrominance[i]);
+        -:  130:  }
+       13:  131:  for(i = 0; i < 12; i++) { // the HUFFVAL list
+       12:  132:    write_to_file(val_dc_chrominance[i]);
+        -:  133:  }
+        -:  134:  
+        -:  135:  //  Ac chrominance
+        1:  136:  write_to_file(0xFF); write_to_file(0xC4); // Define Huffman table marker
+        1:  137:  write_to_file(0x00); write_to_file(0xB5); // Lh - length of this segment
+        1:  138:  write_to_file(0x11);                      // Tc and Th - Table class(Dc=0, Ac=1) and Table Id
+       17:  139:  for(i = 1; i < 17; i++) { // the BITS list
+       16:  140:    write_to_file(bits_ac_chrominance[i]);
+        -:  141:  }
+      163:  142:  for(i = 0; i < 162; i++) { // the HUFFVAL list
+      162:  143:    write_to_file(val_ac_chrominance[i]);
+        -:  144:  }
+        1:  145:}
+        -:  146:
+        -:  147:
+        1:  148:void jfif_scan() {
+        1:  149:  write_to_file(0xFF); write_to_file(0xDA); // start of scan marker
+        1:  150:  write_to_file(0x00); write_to_file(0x0C); // Ls - length of scan header c tidigare
+        1:  151:  write_to_file(0x03);                      // Ns - number of image components   3 tidigare
+        -:  152:  // Y
+        1:  153:  write_to_file(0x01);                      // Cs - scan component selector
+        1:  154:  write_to_file(0x00);                      // Td, Ta - DC & AC entropy coding table selector
+        -:  155:  // Cb
+        1:  156:  write_to_file(0x02);                      // Cs - scan component selector
+        1:  157:  write_to_file(0x11);                      // Td, Ta - DC & AC entropy coding table selector
+        -:  158:  // Cr
+        1:  159:  write_to_file(0x03);                      // Cs - scan component selector
+        1:  160:  write_to_file(0x11);                      // Td, Ta - DC & AC entropy coding table selector
+        -:  161:
+        1:  162:  write_to_file(0x00);                      // Ss - start of spectral selection, 0 for baseline
+        1:  163:  write_to_file(0x3f);                      // Se - end of spectral selection, 63 for baseline
+        1:  164:  write_to_file(0x00);                      // Ah, Al - successive approximation.., not use here
+        1:  165:}
+        -:  166:
+        -:  167:
+        -:  168:
+        1:  169:void jfif_end_of_image() {
+        1:  170:  write_to_file(0xFF); write_to_file(0xD9); // end of image
+        1:  171:}
+        -:  172:
+        -:  173:
+      615:  174:static void write_to_file(unsigned char byte) {
+        -:  175:  // write the byte to a file
+      615:  176:  output_buffer[output_index++] = byte;
+      615:  177:  if(output_index >=4096) flush_output_buffer();
+      615:  178:}
+        -:  179:
+        1:  180:void jfif_write_buffer_to_output_buffer(unsigned char *byte, int num_of_bytes) {
+        -:  181:  // write the byte to a file
+        -:  182:  int i;
+    27389:  183:  for (i=0; i<num_of_bytes; i++) {
+    27388:  184:    output_buffer[output_index++] = byte[i];
+    27388:  185:    if(output_index >=4096) flush_output_buffer();
+        -:  186:  }
+        1:  187:}
+        -:  188:
+        7:  189:static void flush_output_buffer() {
+        7:  190:  fwrite( output_buffer, sizeof(char), output_index, fp);
+        7:  191:  output_index = 0;
+        7:  192:}
+        -:  193:
+        1:  194:void close_jfif_writer() {
+        1:  195:  flush_output_buffer();
+        1:  196:  fclose(fp);
+        1:  197:}
