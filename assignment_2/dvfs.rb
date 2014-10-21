@@ -86,7 +86,7 @@ while path_a_c_fine || path_a_b_fine
   if MODE_CONSOLE
     puts tasks.map{ |t| sprintf '%0.03f', t.round(3) }.inspect + "\t" + (TASKS[0].duration + TASKS[2].duration + TASKS[3].duration).round(2).to_s + "\t" +(TASKS[0].duration + TASKS[1].duration + TASKS[3].duration).round(2).to_s + "\t" + ['A', 'B', 'C', 'D'][index].to_s
   else
-    csv << tasks
+    csv << tasks.push(['A', 'B', 'C', 'D'][index])
   end
 end
 
